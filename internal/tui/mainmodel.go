@@ -41,6 +41,8 @@ const (
 	viewDiscoverItem
 	viewDiscoverNSPick
 	viewDiscoverAlias
+	viewNsAdd
+	viewNsAddConfirm
 )
 
 type promptKind int
@@ -151,6 +153,10 @@ type mainModel struct {
 	discCheck   checklist
 	discPending []onboardNS
 	discAliasIn textinput.Model
+
+	nsAddIn        textinput.Model
+	nsAddContext   string
+	nsAddNamespace string
 }
 
 type onboardNS struct {
@@ -201,6 +207,11 @@ func newMainModel(paths config.Paths, svc *kube.Service, kubeErr error, cfg conf
 	ain.Width = 32
 	ain.Prompt = "Environment name: "
 	m.discAliasIn = ain
+	nsin := textinput.New()
+	nsin.CharLimit = 64
+	nsin.Width = 32
+	nsin.Prompt = "> "
+	m.nsAddIn = nsin
 	if m.skipWelcomeAnim() {
 		m.finishWelcome()
 	}

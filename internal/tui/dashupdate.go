@@ -37,6 +37,8 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.onDiscover(msg)
 	case discoverSavedMsg:
 		return m.onDiscoverSaved(msg)
+	case nsAddedMsg:
+		return m.onNsAdded(msg)
 	case ownerMsg:
 		return m.onOwner(msg)
 	case captureMsg:
@@ -64,6 +66,9 @@ func (m mainModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.searching {
 		return m.handleSearchKey(msg)
+	}
+	if m.nsAddViews() && msg.String() != "ctrl+c" && msg.String() != "q" && msg.String() != "?" {
+		return m.handleNsAddKey(msg)
 	}
 	if m.discoverViews() && msg.String() != "ctrl+c" && msg.String() != "q" && msg.String() != "?" {
 		return m.handleDiscoverKey(msg)
@@ -125,6 +130,10 @@ func (m mainModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.open()
+	case "a":
+		if m.current.view == viewNamespaces {
+			return m.startNsAdd()
+		}
 	case "p":
 		if m.current.view == viewEnv {
 			return m.open()
@@ -251,16 +260,13 @@ func (m mainModel) open() (tea.Model, tea.Cmd) {
 		}
 		row := items[m.nsCursor]
 		if row.Env == "" {
-			m.status = row.Name + " is a namespace, not a kpod environment."
-			return m, nil
+			return m.startNsAdd()
 		}
 		env, ok := m.lookup(row.Env)
 		if !ok {
 			return m, nil
 		}
-		m.push(navFrame{view: viewEnv, envAlias: env.Alias, kubeContext: env.KubeContext})
-		m.podsLoading = true
-		return m, tea.Batch(loadDashPodsCmd(m.kube, env, false), saveLastEnvCmd(m.paths, env.Alias), m.spinner.Tick)
+		return m.openMappedNamespace(env)
 	}
 	return m, nil
 }

@@ -69,6 +69,10 @@ func (m mainModel) View() string {
 		body = m.viewDiscoverNSPick()
 	case viewDiscoverAlias:
 		body = m.viewDiscoverAlias()
+	case viewNsAdd:
+		body = m.viewNsAdd()
+	case viewNsAddConfirm:
+		body = m.viewNsAddConfirm()
 	}
 	if m.searching {
 		body += "\n\n" + m.search.View()
@@ -543,7 +547,44 @@ func (m mainModel) viewNamespaces() string {
 	if m.status != "" && len(items) > 0 {
 		b.WriteString("\n" + styleMuted.Render(m.status) + "\n")
 	}
-	b.WriteString("\n" + styleHelp.Render("enter open env   / search   r refresh   esc back"))
+	b.WriteString("\n" + styleHelp.Render(m.nsHelp()))
+	return b.String()
+}
+
+func (m mainModel) nsHelp() string {
+	if m.width < 56 {
+		return "enter  a  /  r  esc"
+	}
+	return "enter open/add   a add   / search   r refresh   esc back"
+}
+
+func (m mainModel) viewNsAdd() string {
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("Add namespace to kpod") + "\n\n")
+	b.WriteString("Context\n" + m.nsAddContext + "\n\n")
+	b.WriteString("Namespace\n" + m.nsAddNamespace + "\n\n")
+	b.WriteString("Environment name\n")
+	b.WriteString(m.nsAddIn.View() + "\n")
+	if m.status != "" {
+		b.WriteString("\n" + styleErr.Render(m.status) + "\n")
+	}
+	b.WriteString("\n" + styleMuted.Render("The suggestion is editable. Names must be unique.") + "\n")
+	b.WriteString("\n" + styleHelp.Render("enter continue   esc cancel"))
+	return b.String()
+}
+
+func (m mainModel) viewNsAddConfirm() string {
+	alias := strings.TrimSpace(m.nsAddIn.Value())
+	var b strings.Builder
+	b.WriteString(styleTitle.Render("Create environment?") + "\n\n")
+	fmt.Fprintf(&b, "Context:      %s\n", m.nsAddContext)
+	fmt.Fprintf(&b, "Namespace:    %s\n", m.nsAddNamespace)
+	fmt.Fprintf(&b, "Environment:  %s\n\n", alias)
+	b.WriteString("Create environment? [Y/n]\n")
+	if m.status != "" {
+		b.WriteString("\n" + styleErr.Render(m.status) + "\n")
+	}
+	b.WriteString("\n" + styleHelp.Render("enter/y create   n/esc cancel"))
 	return b.String()
 }
 

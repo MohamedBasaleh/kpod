@@ -15,16 +15,31 @@ func SuggestAlias(namespace string, taken map[string]struct{}) string {
 	if ns == "" {
 		return ""
 	}
-	if available(ns, taken) {
-		if short := hyphenPrefix(ns); short != "" && available(short, taken) {
-			return short
+	for _, candidate := range aliasCandidates(ns) {
+		if available(candidate, taken) {
+			return candidate
 		}
-		return ns
-	}
-	if short := hyphenPrefix(ns); short != "" && available(short, taken) {
-		return short
 	}
 	return uniquify(ns, taken)
+}
+
+func aliasCandidates(ns string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	add(hyphenPrefix(ns))
+	add(hyphenSuffix(ns))
+	add(ns)
+	return out
 }
 
 func hyphenPrefix(namespace string) string {
@@ -37,6 +52,18 @@ func hyphenPrefix(namespace string) string {
 		return ""
 	}
 	return prefix
+}
+
+func hyphenSuffix(namespace string) string {
+	i := strings.LastIndexByte(namespace, '-')
+	if i <= 0 || i == len(namespace)-1 {
+		return ""
+	}
+	suffix := namespace[i+1:]
+	if !isSimpleAlias(suffix) {
+		return ""
+	}
+	return suffix
 }
 
 func isSimpleAlias(s string) bool {

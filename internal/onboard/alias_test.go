@@ -9,8 +9,16 @@ func TestSuggestAliasHyphenPrefix(t *testing.T) {
 	}
 }
 
-func TestSuggestAliasCollisionUsesNamespace(t *testing.T) {
+func TestSuggestAliasCollisionUsesSuffix(t *testing.T) {
 	taken := map[string]struct{}{"dev": {}}
+	got := SuggestAlias("dev-inventory", taken)
+	if got != "inventory" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSuggestAliasCollisionUsesNamespace(t *testing.T) {
+	taken := map[string]struct{}{"dev": {}, "core": {}}
 	got := SuggestAlias("dev-core", taken)
 	if got != "dev-core" {
 		t.Fatalf("got %q", got)
