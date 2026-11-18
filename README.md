@@ -194,7 +194,7 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for kubectl, credentials,
 
 ## Development
 
-Go **1.23** is the minimum supported toolchain. CI and release builds use Go 1.23. Users of the binary do not need Go.
+Go **1.26** is the minimum supported toolchain. CI and release builds use Go 1.26. Users of the binary do not need Go.
 
 ```bash
 go test ./...
