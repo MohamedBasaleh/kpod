@@ -1,0 +1,7 @@
+/bin/
+/dist/
+/kpod
+*.test
+*.exe
+.DS_Store
+.gist_id

@@ -1,0 +1,62 @@
+version: 2
+
+project_name: kpod
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kpod
+    main: ./cmd/kpod
+    binary: kpod
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/MohamedBasaleh/kpod/internal/version.Version={{.Version}}
+      - -X github.com/MohamedBasaleh/kpod/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/MohamedBasaleh/kpod/internal/version.Date={{.Date}}
+      - -X github.com/MohamedBasaleh/kpod/internal/version.Repo=MohamedBasaleh/kpod
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - docs/*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: false
+  prerelease: auto
+  name_template: "kpod {{.Tag}}"
+
+brews:
+  - name: kpod
+    description: Fast, interactive Kubernetes access for developers
+    homepage: https://github.com/MohamedBasaleh/kpod
+    directory: Formula
+    skip_upload: true
+    repository:
+      owner: MohamedBasaleh
+      name: homebrew-kpod
+    extra_install: |-
+      generate_completions_from_executable(bin/"kpod", "completion")
+    test: |
+      system "#{bin}/kpod", "--version"

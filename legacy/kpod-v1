@@ -1,0 +1,2056 @@
+#!/usr/bin/env bash
+# kpod — Kubernetes Pod Manager
+#
+# Lightweight interactive CLI for day-to-day backend / Rails work on any
+# Kubernetes cluster. Requires kubectl. No other dependencies.
+#
+# Usage:
+#   kpod                         Interactive menus
+#   kpod <namespace>             Interactive menus in that namespace
+#   kpod <namespace> console     Rails console (pick pod if several)
+#   kpod <namespace> logs        Follow logs (pick pod if several)
+#   kpod <namespace> shell       Exec bash/sh/ash (pick pod if several)
+#   kpod <namespace> download    Copy file from pod
+#   kpod <namespace> upload      Copy file to pod
+#   kpod <namespace> console api Optional pod-name search
+#   kpod -h|--help               Show help
+#   kpod --version               Show version
+#   kpod --update                Reinstall from the kpod source folder
+#
+# Environments live in ~/.config/kpod/contexts (alias|context|namespace).
+# Switch Context lists kubectl get-contexts and can map missing ones.
+#
+# Config:
+#   ~/.config/kpod/config      KEY=value settings (reserved)
+#   ~/.config/kpod/favorites   Stub for future favorite pods / namespaces
+#
+# Compatible with bash 3.2+ (macOS / Linux). Invoke from bash or zsh.
+
+set -euo pipefail
+
+KPOD_NAME="kpod"
+KPOD_VERSION="1.2.0"
+KPOD_GIST_USER="${KPOD_GIST_USER:-MohamedBasaleh}"
+KPOD_GIST_ID="${KPOD_GIST_ID:-1a1ed56eda40abd9e6bc7a018330deec}"
+KPOD_TITLE="Kubernetes Pod Manager (kpod)"
+KPOD_INSTALL_SOURCE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/kpod/install_source"
+KPOD_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kpod"
+KPOD_CONFIG_FILE="${KPOD_CONFIG_DIR}/config"
+KPOD_FAVORITES_FILE="${KPOD_CONFIG_DIR}/favorites"
+KPOD_LAST_NS_FILE="${KPOD_CONFIG_DIR}/last_namespace"
+KPOD_CONTEXTS_FILE="${KPOD_CONFIG_DIR}/contexts"
+KPOD_ROLLOUT_TIMEOUT="${KPOD_ROLLOUT_TIMEOUT:-300s}"
+
+CURRENT_CONTEXT=""
+CURRENT_NAMESPACE=""
+SELECTED_POD=""
+SELECTED_CONTAINER=""
+
+# Packed 1-based env maps: alias | kube context | namespace
+ENV_ALIAS=()
+ENV_CONTEXT=()
+ENV_NS=()
+
+# Indexed from 1. Parallel arrays for the last rendered pod table.
+POD_NAMES=()
+POD_READY=()
+POD_STATUS=()
+POD_RESTARTS=()
+POD_AGE=()
+POD_NODE=()
+
+C_RESET=""
+C_BOLD=""
+C_DIM=""
+C_RED=""
+C_GREEN=""
+C_YELLOW=""
+C_BLUE=""
+C_CYAN=""
+C_GRAY=""
+C_WHITE=""
+
+ICON_OK="+"
+ICON_ERR="x"
+ICON_WARN="!"
+ICON_ARROW=">"
+ICON_POD="*"
+ICON_NS="#"
+ICON_CTX="@"
+
+# ---------------------------------------------------------------------------
+# Bootstrap
+# ---------------------------------------------------------------------------
+
+init_colors() {
+  if [[ ! -t 1 || -n "${NO_COLOR:-}" ]]; then
+    return 0
+  fi
+
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GREEN=$'\033[32m'
+  C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'
+  C_CYAN=$'\033[36m'
+  C_GRAY=$'\033[90m'
+  C_WHITE=$'\033[37m'
+}
+
+init_icons() {
+  local loc
+  loc="$(printf '%s' "${LC_ALL:-}${LC_CTYPE:-}${LANG:-}")"
+  case "$loc" in
+    *[Uu][Tt][Ff][-_]*8*|*[Uu][Tt][Ff]8*)
+      ICON_OK="✓"
+      ICON_ERR="✗"
+      ICON_WARN="!"
+      ICON_ARROW="➜"
+      ICON_POD="●"
+      ICON_NS="☰"
+      ICON_CTX="◎"
+      ;;
+  esac
+}
+
+init_config() {
+  mkdir -p "$KPOD_CONFIG_DIR"
+
+  if [[ ! -f "$KPOD_CONFIG_FILE" ]]; then
+    cat > "$KPOD_CONFIG_FILE" <<'EOF'
+# kpod configuration
+# KEY=value
+#
+# Reserved for future settings, for example:
+# KPOD_DEFAULT_NAMESPACE=
+# KPOD_ROLLOUT_TIMEOUT=300s
+EOF
+  fi
+
+  if [[ ! -f "$KPOD_FAVORITES_FILE" ]]; then
+    cat > "$KPOD_FAVORITES_FILE" <<'EOF'
+# kpod favorites (reserved)
+# One entry per line. Planned format:
+#   namespace/<name>
+#   pod/<namespace>/<name>
+#   context/<name>
+EOF
+  fi
+
+  # shellcheck disable=SC1090
+  if [[ -f "$KPOD_CONFIG_FILE" ]]; then
+    set +u
+    # shellcheck source=/dev/null
+    . "$KPOD_CONFIG_FILE"
+    set -u
+  fi
+
+  ensure_contexts_file
+  load_env_maps
+}
+
+require_kubectl() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    print_error "kubectl not found in PATH"
+    exit 1
+  fi
+}
+
+load_last_namespace() {
+  if [[ -f "$KPOD_LAST_NS_FILE" ]]; then
+    tr -d '[:space:]' < "$KPOD_LAST_NS_FILE"
+  fi
+}
+
+save_last_namespace() {
+  if [[ -n "${CURRENT_NAMESPACE:-}" && "$CURRENT_NAMESPACE" != "default" ]]; then
+    printf '%s\n' "$CURRENT_NAMESPACE" > "$KPOD_LAST_NS_FILE"
+  fi
+}
+
+ensure_contexts_file() {
+  if [[ -f "$KPOD_CONTEXTS_FILE" ]]; then
+    return 0
+  fi
+  cat > "$KPOD_CONTEXTS_FILE" <<'EOF'
+# kpod environment maps
+# alias|kube-context|namespace
+#
+# kubectl contexts not listed here show as [not mapped]
+# in Switch Context. Use "a" there to add them.
+dev|Nawaqis-Dev|dev-core
+staging|Nawaqis-Dev|staging-core
+EOF
+}
+
+clear_env_maps() {
+  ENV_ALIAS=()
+  ENV_CONTEXT=()
+  ENV_NS=()
+}
+
+load_env_maps() {
+  clear_env_maps
+  if [[ ! -f "$KPOD_CONTEXTS_FILE" ]]; then
+    return 0
+  fi
+  local line alias ctx ns rest i=1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      ""|\#*) continue ;;
+    esac
+    alias="${line%%|*}"
+    rest="${line#*|}"
+    ctx="${rest%%|*}"
+    ns="${rest#*|}"
+    alias="$(tolower "$(printf '%s' "$alias" | tr -d '[:space:]')")"
+    ns="$(printf '%s' "$ns" | tr -d '[:space:]')"
+    if [[ -z "$alias" || -z "$ctx" || -z "$ns" ]]; then
+      continue
+    fi
+    ENV_ALIAS[i]="$alias"
+    ENV_CONTEXT[i]="$ctx"
+    ENV_NS[i]="$ns"
+    i=$((i + 1))
+  done < "$KPOD_CONTEXTS_FILE"
+}
+
+save_env_maps() {
+  local i=1
+  {
+    cat <<'EOF'
+# kpod environment maps
+# alias|kube-context|namespace
+EOF
+    while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+      printf '%s|%s|%s\n' "${ENV_ALIAS[i]}" "${ENV_CONTEXT[i]}" "${ENV_NS[i]}"
+      i=$((i + 1))
+    done
+  } > "$KPOD_CONTEXTS_FILE"
+}
+
+env_index_by_alias() {
+  local want="$1"
+  local i=1
+  want="$(tolower "$want")"
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_ALIAS[i]}" == "$want" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+env_index_by_context() {
+  local want="$1"
+  local i=1
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_CONTEXT[i]}" == "$want" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+env_index_by_ns() {
+  local want="$1"
+  local i=1
+  want="$(tolower "$want")"
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "$(tolower "${ENV_NS[i]}")" == "$want" ]]; then
+      printf '%s' "$i"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+upsert_env_map() {
+  local alias="$1"
+  local ctx="$2"
+  local ns="$3"
+  local idx
+  alias="$(tolower "$(printf '%s' "$alias" | tr -d '[:space:]')")"
+  ns="$(printf '%s' "$ns" | tr -d '[:space:]')"
+  if [[ -z "$alias" || -z "$ctx" || -z "$ns" ]]; then
+    return 1
+  fi
+  idx="$(env_index_by_alias "$alias" || true)"
+  if [[ -n "$idx" ]]; then
+    ENV_CONTEXT[idx]="$ctx"
+    ENV_NS[idx]="$ns"
+  else
+    idx=1
+    while [[ -n "${ENV_ALIAS[idx]:-}" ]]; do
+      idx=$((idx + 1))
+    done
+    ENV_ALIAS[idx]="$alias"
+    ENV_CONTEXT[idx]="$ctx"
+    ENV_NS[idx]="$ns"
+  fi
+  save_env_maps
+}
+
+remove_env_map_at() {
+  local del="$1"
+  local i="$del"
+  local next
+  if [[ -z "${ENV_ALIAS[del]:-}" ]]; then
+    return 1
+  fi
+  next=$((del + 1))
+  while [[ -n "${ENV_ALIAS[next]:-}" ]]; do
+    ENV_ALIAS[i]="${ENV_ALIAS[next]}"
+    ENV_CONTEXT[i]="${ENV_CONTEXT[next]}"
+    ENV_NS[i]="${ENV_NS[next]}"
+    i=$((i + 1))
+    next=$((next + 1))
+  done
+  unset ENV_ALIAS[i]
+  unset ENV_CONTEXT[i]
+  unset ENV_NS[i]
+  save_env_maps
+}
+
+refresh_cluster_state() {
+  local ctx ns last
+  ctx="$(kubectl config current-context 2>/dev/null || true)"
+  if [[ -z "$ctx" ]]; then
+    CURRENT_CONTEXT="(none)"
+    if [[ -z "${CURRENT_NAMESPACE:-}" ]]; then
+      last="$(load_last_namespace)"
+      CURRENT_NAMESPACE="$(resolve_namespace "${last:-}")"
+    fi
+    return 1
+  fi
+  CURRENT_CONTEXT="$ctx"
+
+  ns="$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null || true)"
+  if [[ -z "${CURRENT_NAMESPACE:-}" || "$CURRENT_NAMESPACE" == "default" ]]; then
+    if [[ -n "$ns" && "$ns" != "default" ]]; then
+      CURRENT_NAMESPACE="$ns"
+    else
+      last="$(load_last_namespace)"
+      if [[ -n "$last" ]]; then
+        CURRENT_NAMESPACE="$(resolve_namespace "$last")"
+      else
+        CURRENT_NAMESPACE=""
+      fi
+    fi
+  fi
+  return 0
+}
+
+namespace_valid_for_context() {
+  local ctx="$1"
+  local ns="$2"
+  local i=1
+  if [[ -z "$ctx" || -z "$ns" || "$ns" == "default" ]]; then
+    return 1
+  fi
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_CONTEXT[i]}" == "$ctx" && "${ENV_NS[i]}" == "$ns" ]]; then
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+clear_screen() {
+  if command -v clear >/dev/null 2>&1 && [[ -t 1 ]]; then
+    clear
+  else
+    printf '\033[2J\033[H'
+  fi
+}
+
+print_header() {
+  local subtitle="${1:-}"
+  clear_screen
+  printf '%s==========================================%s\n' "$C_CYAN" "$C_RESET"
+  printf '%s %s%s\n' "$C_BOLD" "$KPOD_TITLE" "$C_RESET"
+  printf '%s==========================================%s\n' "$C_CYAN" "$C_RESET"
+  printf '%s Current Context: %s%s%s\n' "$ICON_CTX" "$C_BOLD" "$(context_menu_label "${CURRENT_CONTEXT:-unknown}")" "$C_RESET"
+  printf '%s Current Namespace: %s%s%s\n' "$ICON_NS" "$C_BOLD" "${CURRENT_NAMESPACE:-unknown}" "$C_RESET"
+  if [[ -n "$subtitle" ]]; then
+    printf '\n%s%s%s\n' "$C_DIM" "$subtitle" "$C_RESET"
+  fi
+  printf '\n'
+}
+
+print_error() {
+  printf '%s%s %s%s\n' "$C_RED" "$ICON_ERR" "$1" "$C_RESET" >&2
+}
+
+print_success() {
+  printf '%s%s %s%s\n' "$C_GREEN" "$ICON_OK" "$1" "$C_RESET"
+}
+
+print_info() {
+  printf '%s%s %s%s\n' "$C_CYAN" "$ICON_ARROW" "$1" "$C_RESET"
+}
+
+print_warn() {
+  printf '%s%s %s%s\n' "$C_YELLOW" "$ICON_WARN" "$1" "$C_RESET"
+}
+
+restore_tty() {
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    return 0
+  fi
+  stty sane < /dev/tty 2>/dev/null || true
+  stty icrnl icanon echo -echoctl < /dev/tty 2>/dev/null || true
+}
+
+read_line() {
+  local dest=""
+  restore_tty
+  if [[ -r /dev/tty ]]; then
+    IFS= read -r dest < /dev/tty || dest=""
+  else
+    IFS= read -r dest || dest=""
+  fi
+  dest="$(printf '%s' "$dest" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  printf '%s' "$dest"
+}
+
+pause() {
+  if [[ "${SKIP_PAUSE:-0}" == "1" ]]; then
+    return 0
+  fi
+  printf '\n%sPress ENTER to continue...%s' "$C_DIM" "$C_RESET"
+  read_line >/dev/null || true
+}
+
+read_prompt() {
+  local prompt="$1"
+  printf '%s' "$prompt" >&2
+  read_line
+}
+
+read_choice() {
+  local prompt="${1:-Select: }"
+  read_prompt "$prompt"
+}
+
+confirm() {
+  local prompt="${1:-Continue?}"
+  local answer
+  printf '%s\n\n(y/N) ' "$prompt" >&2
+  answer="$(read_line)"
+  case "$answer" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+page_output() {
+  if [[ -t 1 ]] && command -v less >/dev/null 2>&1; then
+    less -R
+  else
+    cat
+  fi
+}
+
+tolower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+is_number() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+print_usage() {
+  cat <<EOF
+${KPOD_TITLE}
+
+Usage:
+  ${KPOD_NAME}                         Start the interactive manager
+  ${KPOD_NAME} <namespace>             Open the manager in that namespace
+  ${KPOD_NAME} <namespace> console     Rails console
+  ${KPOD_NAME} <namespace> logs        Follow logs
+  ${KPOD_NAME} <namespace> shell       Pod shell (bash, then sh, then ash)
+  ${KPOD_NAME} <namespace> download    Copy file from pod (kubectl cp)
+  ${KPOD_NAME} <namespace> upload      Copy file to pod (kubectl cp)
+  ${KPOD_NAME} <namespace> console api Optional search (case-insensitive)
+  ${KPOD_NAME} -h|--help               Show this help
+  ${KPOD_NAME} --version               Show version (${KPOD_VERSION})
+  ${KPOD_NAME} --update                Download latest kpod from GitHub Gist
+
+Install / update:
+  curl -fsSL https://gist.githubusercontent.com/MohamedBasaleh/1a1ed56eda40abd9e6bc7a018330deec/raw/install.sh | bash
+  kpod --update
+
+Config (~/.config/kpod/) is kept on update.
+
+Actions:
+  console, c, rails              bundle exec rails console
+  logs, log, l                   kubectl logs -f
+  shell, bash, sh, exec          kubectl exec (bash → sh → ash)
+  download, dl, get              kubectl cp pod:remote local
+  upload, ul, put                kubectl cp local pod:remote
+
+If one matching pod: Enter on the command is enough.
+If several: pick a number, then the action starts.
+
+Environments (from ~/.config/kpod/contexts):
+  kpod <alias>                 switch mapped context + namespace
+  kpod dev console
+  kpod staging logs
+
+Main menu:
+  1) List Contexts     kubectl get-contexts, mapped alias/namespace, add (a) / remove (r)
+  2) Browse Pods       list pods in the mapped namespace
+  3) Change Namespace
+
+Requires kubectl. Config lives in ${KPOD_CONFIG_DIR}/
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# kubectl wrappers
+# ---------------------------------------------------------------------------
+
+kc() {
+  kubectl -n "$CURRENT_NAMESPACE" "$@"
+}
+
+# Run kubectl; print a short error and return 1 on failure.
+kc_ok() {
+  local err out
+  err="$(mktemp 2>/dev/null || echo "/tmp/kpod.$$.err")"
+  if out="$(kubectl "$@" 2>"$err")"; then
+    printf '%s' "$out"
+    rm -f "$err"
+    return 0
+  fi
+  if [[ -s "$err" ]]; then
+    print_error "$(tr '\n' ' ' < "$err")"
+  else
+    print_error "kubectl failed: $*"
+  fi
+  rm -f "$err"
+  return 1
+}
+
+kc_ns_ok() {
+  local err out
+  err="$(mktemp 2>/dev/null || echo "/tmp/kpod.$$.err")"
+  if out="$(kubectl -n "$CURRENT_NAMESPACE" "$@" 2>"$err")"; then
+    printf '%s' "$out"
+    rm -f "$err"
+    return 0
+  fi
+  if [[ -s "$err" ]]; then
+    print_error "$(tr '\n' ' ' < "$err")"
+    if grep -qi 'forbidden' "$err"; then
+      print_info "IAM cannot list this in namespace '${CURRENT_NAMESPACE}'."
+      print_info "Use: kpod dev   or   kpod staging   (maps to dev-core / staging-core)"
+    fi
+  else
+    print_error "kubectl failed: $*"
+  fi
+  rm -f "$err"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Time / table helpers
+# ---------------------------------------------------------------------------
+
+epoch_from_k8s() {
+  local ts="$1"
+  local stripped mac linux
+  stripped="${ts%%.*}"
+  stripped="${stripped%Z}"
+  stripped="${stripped%+00:00}"
+
+  mac="$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "$stripped" "+%s" 2>/dev/null || true)"
+  if [[ -n "$mac" ]]; then
+    printf '%s' "$mac"
+    return 0
+  fi
+
+  linux="$(date -u -d "${stripped}Z" "+%s" 2>/dev/null || true)"
+  if [[ -n "$linux" ]]; then
+    printf '%s' "$linux"
+    return 0
+  fi
+  return 1
+}
+
+human_age() {
+  local ts="$1"
+  local now epoch delta
+  now="$(date +%s)"
+  epoch="$(epoch_from_k8s "$ts" || true)"
+  if [[ -z "$epoch" ]]; then
+    printf '?'
+    return 0
+  fi
+  delta=$((now - epoch))
+  if (( delta < 0 )); then
+    delta=0
+  fi
+  if (( delta < 60 )); then
+    printf '%ss' "$delta"
+  elif (( delta < 3600 )); then
+    printf '%sm' $((delta / 60))
+  elif (( delta < 86400 )); then
+    printf '%sh' $((delta / 3600))
+  else
+    printf '%sd' $((delta / 86400))
+  fi
+}
+
+ready_frac() {
+  local flags="$1"
+  local total=0
+  local ready=0
+  local f
+  local IFS=','
+  for f in $flags; do
+    [[ -z "$f" ]] && continue
+    total=$((total + 1))
+    if [[ "$f" == "true" ]]; then
+      ready=$((ready + 1))
+    fi
+  done
+  printf '%s/%s' "$ready" "$total"
+}
+
+sum_ints() {
+  local vals="$1"
+  local total=0
+  local v
+  local IFS=','
+  for v in $vals; do
+    [[ -z "$v" ]] && continue
+    [[ "$v" =~ ^[0-9]+$ ]] || continue
+    total=$((total + v))
+  done
+  printf '%s' "$total"
+}
+
+first_nonempty() {
+  local vals="$1"
+  local v
+  local IFS=','
+  for v in $vals; do
+    if [[ -n "$v" ]]; then
+      printf '%s' "$v"
+      return 0
+    fi
+  done
+  return 1
+}
+
+status_color() {
+  local status="$1"
+  case "$status" in
+    Running)
+      printf '%s' "$C_GREEN"
+      ;;
+    Pending|ContainerCreating|PodInitializing|Init*)
+      printf '%s' "$C_YELLOW"
+      ;;
+    CrashLoopBackOff|Error|ErrImage*|ImagePullBackOff|Failed|Unknown)
+      printf '%s' "$C_RED"
+      ;;
+    Completed|Succeeded)
+      printf '%s' "$C_GRAY"
+      ;;
+    *)
+      case "$status" in
+        *CrashLoop*|*Error*|*Fail*|*BackOff*)
+          printf '%s' "$C_RED"
+          ;;
+        *Pending*|*Creating*|*Init*)
+          printf '%s' "$C_YELLOW"
+          ;;
+        *)
+          printf '%s' "$C_WHITE"
+          ;;
+      esac
+      ;;
+  esac
+}
+
+resolve_display_status() {
+  local phase="$1"
+  local waiting="$2"
+  local terminated="$3"
+  local reason
+  reason="$(first_nonempty "$waiting" || true)"
+  if [[ -n "$reason" ]]; then
+    printf '%s' "$reason"
+    return 0
+  fi
+  reason="$(first_nonempty "$terminated" || true)"
+  if [[ -n "$reason" ]]; then
+    if [[ "$reason" == "Completed" || "$phase" == "Succeeded" ]]; then
+      printf 'Completed'
+    else
+      printf '%s' "$reason"
+    fi
+    return 0
+  fi
+  if [[ "$phase" == "Succeeded" ]]; then
+    printf 'Completed'
+  else
+    printf '%s' "$phase"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Cluster: context + namespace
+# ---------------------------------------------------------------------------
+
+print_context_maps() {
+  local ctx="$1"
+  local i=1 found=0
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_CONTEXT[i]}" == "$ctx" ]]; then
+      printf '       %s%-8s%s →  %s\n' "$C_GREEN" "${ENV_ALIAS[i]}" "$C_RESET" "${ENV_NS[i]}"
+      found=1
+    fi
+    i=$((i + 1))
+  done
+  if [[ "$found" -eq 0 ]]; then
+    printf '       %s[not mapped]%s\n' "$C_YELLOW" "$C_RESET"
+  fi
+}
+
+list_kubectl_context_names() {
+  kubectl config get-contexts -o name 2>/dev/null || true
+}
+
+select_context() {
+  print_header "List Contexts"
+  print_info "kubectl config get-contexts"
+  printf '\n'
+  local raw
+  raw="$(list_kubectl_context_names)"
+  if [[ -z "$raw" ]]; then
+    print_error "No contexts found"
+    pause
+    return 1
+  fi
+
+  local names
+  names=()
+  local line i=1 missing=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    names[i]="$line"
+    if [[ "$line" == "$CURRENT_CONTEXT" ]]; then
+      printf '  %s%2d)%s %s %s(current)%s\n' "$C_BOLD" "$i" "$C_RESET" "$line" "$C_DIM" "$C_RESET"
+    else
+      printf '  %2d) %s\n' "$i" "$line"
+    fi
+    print_context_maps "$line"
+    printf '\n'
+    if [[ -z "$(env_for_context "$line")" ]]; then
+      missing=$((missing + 1))
+    fi
+    i=$((i + 1))
+  done <<< "$raw"
+
+  local last=$((i - 1))
+  if (( last < 1 )); then
+    print_error "No contexts found"
+    pause
+    return 1
+  fi
+
+  if (( missing > 0 )); then
+    printf '  a) Add mapping for an unmapped context (%s missing)\n' "$missing"
+  else
+    print_success "All kubectl contexts are mapped in kpod"
+  fi
+  printf '  r) Remove a mapped context\n'
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select context (empty cancels): ")"
+  if [[ -z "$choice" ]]; then
+    return 0
+  fi
+  case "$(tolower "$choice")" in
+    a)
+      add_missing_context
+      return 0
+      ;;
+    r)
+      remove_mapped_context
+      return 0
+      ;;
+  esac
+  if ! is_number "$choice" || (( choice < 1 || choice > last )); then
+    print_error "Invalid selection"
+    pause
+    return 1
+  fi
+
+  local target="${names[choice]}"
+  if apply_context "$target"; then
+    print_success "Context ${CURRENT_CONTEXT}  |  namespace ${CURRENT_NAMESPACE}"
+    if [[ -z "$(env_for_context "$target")" ]]; then
+      print_warn "This context is not mapped in kpod."
+      printf '\n'
+      local add
+      add="$(read_prompt "Add mapping now? (y/N) ")"
+      case "$add" in
+        y|Y|yes|YES) add_mapping_for_context "$target" ;;
+      esac
+    fi
+    if [[ -n "${CURRENT_NAMESPACE:-}" && "$CURRENT_NAMESPACE" != "default" ]]; then
+      browse_namespace_pods
+      return 0
+    fi
+  else
+    print_error "Failed to switch context"
+  fi
+  pause
+}
+
+add_missing_context() {
+  print_header "Add missing context"
+  local raw line i=1
+  local names
+  names=()
+  raw="$(list_kubectl_context_names)"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    if [[ -n "$(env_for_context "$line")" ]]; then
+      continue
+    fi
+    names[i]="$line"
+    printf '  %2d) %s  [not mapped]\n' "$i" "$line"
+    i=$((i + 1))
+  done <<< "$raw"
+
+  local last=$((i - 1))
+  if (( last < 1 )); then
+    print_success "Nothing missing"
+    pause
+    return 0
+  fi
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select context to map (empty cancels): ")"
+  if [[ -z "$choice" ]]; then
+    return 0
+  fi
+  if ! is_number "$choice" || [[ -z "${names[choice]:-}" ]]; then
+    print_error "Invalid selection"
+    pause
+    return 1
+  fi
+  add_mapping_for_context "${names[choice]}"
+  pause
+}
+
+remove_mapped_context() {
+  print_header "Remove mapped context"
+  local i=1
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    printf '  %2d) %s  →  %s  (%s)\n' "$i" "${ENV_ALIAS[i]}" "${ENV_CONTEXT[i]}" "${ENV_NS[i]}"
+    i=$((i + 1))
+  done
+  local last=$((i - 1))
+  if (( last < 1 )); then
+    print_warn "No mapped contexts"
+    pause
+    return 0
+  fi
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select mapping to remove (empty cancels): ")"
+  if [[ -z "$choice" ]]; then
+    return 0
+  fi
+  if ! is_number "$choice" || [[ -z "${ENV_ALIAS[choice]:-}" ]]; then
+    print_error "Invalid selection"
+    pause
+    return 1
+  fi
+  local alias ctx ns
+  alias="${ENV_ALIAS[choice]}"
+  ctx="${ENV_CONTEXT[choice]}"
+  ns="${ENV_NS[choice]}"
+  printf '\n'
+  if ! confirm "Remove mapping ${alias} → ${ctx} (${ns})?"; then
+    print_warn "Cancelled"
+    pause
+    return 0
+  fi
+  if ! remove_env_map_at "$choice"; then
+    print_error "Could not remove mapping"
+    pause
+    return 1
+  fi
+  if [[ "${CURRENT_NAMESPACE:-}" == "$ns" ]]; then
+    CURRENT_NAMESPACE=""
+  fi
+  print_success "Removed ${alias} (${ns})"
+  print_info "kubectl context ${ctx} is unchanged. Only the kpod mapping was removed."
+  pause
+}
+
+add_mapping_for_context() {
+  local ctx="$1"
+  local alias ns
+  print_info "Context: ${ctx}"
+  alias="$(read_prompt "Alias (e.g. prod): ")"
+  ns="$(read_prompt "Namespace (e.g. prod-core): ")"
+  alias="$(tolower "$(printf '%s' "$alias" | tr -d '[:space:]')")"
+  ns="$(printf '%s' "$ns" | tr -d '[:space:]')"
+  if [[ -z "$alias" || -z "$ns" ]]; then
+    print_warn "Cancelled"
+    return 1
+  fi
+  if ! upsert_env_map "$alias" "$ctx" "$ns"; then
+    print_error "Could not save mapping"
+    return 1
+  fi
+  print_success "Saved ${alias} | ${ctx} | ${ns}"
+  print_info "Use: kpod ${alias}"
+}
+
+resolve_namespace() {
+  local ns idx
+  ns="$(tolower "$1")"
+  idx="$(env_index_by_alias "$ns" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_NS[idx]}"
+    return 0
+  fi
+  idx="$(env_index_by_ns "$ns" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_NS[idx]}"
+    return 0
+  fi
+  printf '%s' "$ns"
+}
+
+env_from_arg() {
+  local n idx
+  n="$(tolower "$1")"
+  idx="$(env_index_by_alias "$n" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_ALIAS[idx]}"
+    return 0
+  fi
+  idx="$(env_index_by_ns "$n" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_ALIAS[idx]}"
+    return 0
+  fi
+  printf ''
+}
+
+context_for_env() {
+  local idx
+  idx="$(env_index_by_alias "$1" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_CONTEXT[idx]}"
+  fi
+}
+
+env_for_context() {
+  local idx
+  idx="$(env_index_by_context "$1" || true)"
+  if [[ -n "$idx" ]]; then
+    printf '%s' "${ENV_ALIAS[idx]}"
+  fi
+}
+
+context_menu_label() {
+  local ctx="$1"
+  local i=1 tags=""
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_CONTEXT[i]}" == "$ctx" ]]; then
+      if [[ -n "$tags" ]]; then
+        tags="${tags}, ${ENV_ALIAS[i]} / ${ENV_NS[i]}"
+      else
+        tags="${ENV_ALIAS[i]} / ${ENV_NS[i]}"
+      fi
+    fi
+    i=$((i + 1))
+  done
+  if [[ -n "$tags" ]]; then
+    printf '%s  [%s]' "$ctx" "$tags"
+  else
+    printf '%s  [not mapped]' "$ctx"
+  fi
+}
+
+pick_env_for_context() {
+  local target="$1"
+  local i=1 n=0
+  local aliases
+  aliases=()
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    if [[ "${ENV_CONTEXT[i]}" == "$target" ]]; then
+      n=$((n + 1))
+      aliases[n]="${ENV_ALIAS[i]}"
+    fi
+    i=$((i + 1))
+  done
+  if (( n == 0 )); then
+    printf ''
+    return 1
+  fi
+  if (( n == 1 )); then
+    printf '%s' "${aliases[1]}"
+    return 0
+  fi
+  local j=1
+  while [[ -n "${aliases[j]:-}" ]]; do
+    if [[ "$(resolve_namespace "${aliases[j]}")" == "${CURRENT_NAMESPACE:-}" ]]; then
+      printf '%s' "${aliases[j]}"
+      return 0
+    fi
+    j=$((j + 1))
+  done
+  printf '\n%sThis context is used by more than one environment:%s\n' "$C_BOLD" "$C_RESET" >&2
+  j=1
+  while [[ -n "${aliases[j]:-}" ]]; do
+    printf '  %2d) %s  (%s)\n' "$j" "${aliases[j]}" "$(resolve_namespace "${aliases[j]}")" >&2
+    j=$((j + 1))
+  done
+  printf '\n' >&2
+  local choice
+  choice="$(read_choice "Select environment: ")"
+  if is_number "$choice" && [[ -n "${aliases[choice]:-}" ]]; then
+    printf '%s' "${aliases[choice]}"
+    return 0
+  fi
+  printf '%s' "${aliases[1]}"
+}
+
+apply_context() {
+  local target="$1"
+  local env
+  if ! kubectl config use-context "$target" >/dev/null; then
+    return 1
+  fi
+  CURRENT_CONTEXT="$target"
+  env="$(pick_env_for_context "$target" || true)"
+  if [[ -n "$env" ]]; then
+    CURRENT_NAMESPACE="$(resolve_namespace "$env")"
+  else
+    CURRENT_NAMESPACE=""
+    refresh_cluster_state || true
+  fi
+  save_last_namespace
+}
+
+apply_env() {
+  local env="$1"
+  local ctx
+  ctx="$(context_for_env "$env")"
+  if [[ -z "$ctx" ]]; then
+    print_error "No kube context mapped for ${env}"
+    return 1
+  fi
+  if [[ "${CURRENT_CONTEXT:-}" != "$ctx" ]]; then
+    if ! kubectl config use-context "$ctx" >/dev/null; then
+      print_error "Failed to switch to context ${ctx}"
+      return 1
+    fi
+  fi
+  CURRENT_CONTEXT="$ctx"
+  CURRENT_NAMESPACE="$(resolve_namespace "$env")"
+  save_last_namespace
+}
+
+set_namespace() {
+  local ns="$1"
+  local env
+  if [[ -z "$ns" ]]; then
+    print_warn "Cancelled"
+    return 1
+  fi
+  env="$(env_from_arg "$ns")"
+  if [[ -n "$env" ]]; then
+    apply_env "$env" || return 1
+  else
+    CURRENT_NAMESPACE="$(resolve_namespace "$ns")"
+    save_last_namespace
+  fi
+  print_success "Context ${CURRENT_CONTEXT}  |  namespace ${CURRENT_NAMESPACE}"
+}
+
+ns_choice_label() {
+  local num="$1"
+  local alias="$2"
+  local label="$3"
+  if [[ "$CURRENT_NAMESPACE" == "$(resolve_namespace "$alias")" ]]; then
+    printf '  %s%2d)%s %s %s(current)%s\n' "$C_BOLD" "$num" "$C_RESET" "$label" "$C_DIM" "$C_RESET"
+  else
+    printf '  %2d) %s\n' "$num" "$label"
+  fi
+}
+
+ensure_namespace() {
+  if namespace_valid_for_context "${CURRENT_CONTEXT:-}" "${CURRENT_NAMESPACE:-}"; then
+    return 0
+  fi
+  if [[ -n "$(env_for_context "${CURRENT_CONTEXT:-}")" ]]; then
+    print_warn "Namespace '${CURRENT_NAMESPACE:-unset}' is not mapped for this context."
+    print_info "Pick a mapped environment for ${CURRENT_CONTEXT}"
+    local env
+    env="$(pick_env_for_context "$CURRENT_CONTEXT" || true)"
+    if [[ -n "$env" ]]; then
+      apply_env "$env" || return 1
+      return 0
+    fi
+  fi
+  select_namespace
+  if [[ -z "${CURRENT_NAMESPACE:-}" || "$CURRENT_NAMESPACE" == "default" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+select_namespace() {
+  print_header "Change Namespace"
+  print_info "Mapped environments (from ~/.config/kpod/contexts):"
+  printf '\n'
+  local i=1
+  while [[ -n "${ENV_ALIAS[i]:-}" ]]; do
+    ns_choice_label "$i" "${ENV_ALIAS[i]}" "${ENV_ALIAS[i]}  (${ENV_NS[i]})"
+    i=$((i + 1))
+  done
+  local extra="$i"
+  printf '  %2d) Type another name\n' "$extra"
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select: ")"
+  if [[ -z "$choice" ]]; then
+    return 0
+  fi
+  if is_number "$choice" && [[ -n "${ENV_ALIAS[choice]:-}" ]]; then
+    set_namespace "${ENV_ALIAS[choice]}"
+  elif [[ "$choice" == "$extra" ]]; then
+    local typed
+    typed="$(read_prompt "Namespace name: ")"
+    set_namespace "$typed" || true
+  else
+    set_namespace "$choice" || true
+  fi
+  pause
+}
+
+# ---------------------------------------------------------------------------
+# Pods
+# ---------------------------------------------------------------------------
+
+# TAB fields: name phase node created readies restarts waiting terminated
+POD_JSONPATH='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.nodeName}{"\t"}{.metadata.creationTimestamp}{"\t"}{range .status.containerStatuses[*]}{.ready}{","}{end}{"\t"}{range .status.containerStatuses[*]}{.restartCount}{","}{end}{"\t"}{range .status.containerStatuses[*]}{.state.waiting.reason}{","}{end}{"\t"}{range .status.containerStatuses[*]}{.state.terminated.reason}{","}{end}{"\n"}{end}'
+
+clear_pod_arrays() {
+  POD_NAMES=()
+  POD_READY=()
+  POD_STATUS=()
+  POD_RESTARTS=()
+  POD_AGE=()
+  POD_NODE=()
+}
+
+load_pods() {
+  local running_only="$1"
+  local search="$2"
+  clear_pod_arrays
+
+  local raw
+  if ! raw="$(kc_ns_ok get pods -o jsonpath="$POD_JSONPATH")"; then
+    return 1
+  fi
+  if [[ -z "$raw" ]]; then
+    return 0
+  fi
+
+  local search_lc
+  search_lc="$(tolower "$search")"
+
+  local name phase node created readies restarts waiting terminated
+  local status ready age idx=1
+  while IFS=$'\t' read -r name phase node created readies restarts waiting terminated; do
+    [[ -z "$name" ]] && continue
+
+    status="$(resolve_display_status "$phase" "${waiting:-}" "${terminated:-}")"
+    ready="$(ready_frac "${readies:-}")"
+    age="$(human_age "${created:-}")"
+
+    if [[ "$running_only" == "1" && "$status" != "Running" ]]; then
+      continue
+    fi
+    if [[ -n "$search_lc" ]]; then
+      case "$(tolower "$name")" in
+        *"$search_lc"*) ;;
+        *) continue ;;
+      esac
+    fi
+
+    POD_NAMES[idx]="$name"
+    POD_READY[idx]="$ready"
+    POD_STATUS[idx]="$status"
+    POD_RESTARTS[idx]="$(sum_ints "${restarts:-}")"
+    POD_AGE[idx]="$age"
+    POD_NODE[idx]="${node:--}"
+    idx=$((idx + 1))
+  done <<< "$raw"
+}
+
+print_pod_table() {
+  local count="${#POD_NAMES[@]}"
+  if (( count == 0 )); then
+    print_warn "No pods match"
+    return 0
+  fi
+
+  printf '%s%-4s %-8s %-22s %-10s %-6s %-22s %s%s\n' \
+    "$C_BOLD" "#" "Ready" "Status" "Restarts" "Age" "Node" "Pod Name" "$C_RESET"
+  printf '%s%s%s\n' "$C_DIM" "--------------------------------------------------------------------------------" "$C_RESET"
+
+  local i color
+  for i in "${!POD_NAMES[@]}"; do
+    color="$(status_color "${POD_STATUS[i]}")"
+    printf '%-4s %-8s ' "$i" "${POD_READY[i]}"
+    printf '%b%-22s%b' "$color" "${POD_STATUS[i]}" "$C_RESET"
+    printf ' %-10s %-6s %-22s %s\n' \
+      "${POD_RESTARTS[i]}" "${POD_AGE[i]}" "${POD_NODE[i]}" "${POD_NAMES[i]}"
+  done
+}
+
+list_containers() {
+  local pod="$1"
+  kc get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null || true
+}
+
+select_container() {
+  local pod="$1"
+  SELECTED_CONTAINER=""
+  local raw
+  raw="$(list_containers "$pod")"
+  if [[ -z "$raw" ]]; then
+    print_error "No containers found on ${pod}"
+    return 1
+  fi
+
+  local names
+  names=()
+  local line i=1
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    names[i]="$line"
+    i=$((i + 1))
+  done <<< "$raw"
+
+  local last=$((i - 1))
+  if (( last == 1 )); then
+    SELECTED_CONTAINER="${names[1]}"
+    return 0
+  fi
+
+  printf '\n%sMultiple containers%s\n' "$C_BOLD" "$C_RESET"
+  local n
+  for n in "${!names[@]}"; do
+    printf '  %2d) %s\n' "$n" "${names[n]}"
+  done
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select container: ")"
+  if ! is_number "$choice" || (( choice < 1 || choice > last )); then
+    print_error "Invalid container"
+    return 1
+  fi
+  SELECTED_CONTAINER="${names[choice]}"
+}
+
+# ---------------------------------------------------------------------------
+# Owner / deployment
+# ---------------------------------------------------------------------------
+
+resolve_owner_deployment() {
+  local pod="${1:-$SELECTED_POD}"
+  local rs deploy
+  rs="$(kc get pod "$pod" -o jsonpath='{.metadata.ownerReferences[?(@.kind=="ReplicaSet")].name}' 2>/dev/null || true)"
+  if [[ -z "$rs" ]]; then
+    return 1
+  fi
+  deploy="$(kc get rs "$rs" -o jsonpath='{.metadata.ownerReferences[?(@.kind=="Deployment")].name}' 2>/dev/null || true)"
+  if [[ -z "$deploy" ]]; then
+    return 1
+  fi
+  printf '%s' "$deploy"
+}
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+
+exec_in_pod() {
+  local -a flags
+  flags=(-i)
+  if [[ -t 0 || -r /dev/tty ]]; then
+    flags=(-it)
+    restore_tty
+  fi
+  export TERM="${TERM:-xterm-256color}"
+  if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+    kc exec "${flags[@]}" "$SELECTED_POD" -c "$SELECTED_CONTAINER" -- "$@"
+  else
+    kc exec "${flags[@]}" "$SELECTED_POD" -- "$@"
+  fi
+  restore_tty
+}
+
+probe_shell() {
+  local shell="$1"
+  if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+    kc exec "$SELECTED_POD" -c "$SELECTED_CONTAINER" -- "$shell" -c "exit 0" >/dev/null 2>&1
+  else
+    kc exec "$SELECTED_POD" -- "$shell" -c "exit 0" >/dev/null 2>&1
+  fi
+}
+
+exec_shell() {
+  local preferred="${1:-}"
+  local shells
+  if [[ "$preferred" == "sh" ]]; then
+    shells="sh ash bash"
+  else
+    shells="bash sh ash"
+  fi
+
+  if [[ "${SKIP_PAUSE:-0}" != "1" ]]; then
+    print_header "Exec"
+    printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  fi
+
+  if [[ ! -t 0 && ! -r /dev/tty ]]; then
+    print_error "Need an interactive terminal. Run this from iTerm/Terminal/Cursor, not a pipe."
+    pause
+    return 1
+  fi
+
+  local shell
+  for shell in $shells; do
+    if probe_shell "$shell"; then
+      print_info "Opening ${shell} on ${SELECTED_POD}"
+      set +e
+      exec_in_pod "$shell"
+      local rc=$?
+      set -e
+      if [[ $rc -ne 0 ]]; then
+        print_error "Shell exited with ${rc}"
+      fi
+      pause
+      return 0
+    fi
+  done
+  print_error "No shell found (tried: ${shells})"
+  pause
+}
+
+rails_console() {
+  if [[ "${SKIP_PAUSE:-0}" != "1" ]]; then
+    print_header "Rails Console"
+    printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  fi
+  print_info "bundle exec rails console on ${SELECTED_POD}"
+  if [[ ! -t 0 && ! -r /dev/tty ]]; then
+    print_error "Need an interactive terminal. Run this from iTerm/Terminal/Cursor, not a pipe."
+    pause
+    return 1
+  fi
+  set +e
+  exec_in_pod bundle exec rails console
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    print_error "Rails console exited with ${rc}"
+  fi
+  pause
+}
+
+rails_dbconsole() {
+  print_header "Rails DB Console"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  print_info "bundle exec rails dbconsole"
+  set +e
+  exec_in_pod bundle exec rails dbconsole
+  set -e
+  pause
+}
+
+rails_runner() {
+  print_header "Rails Runner"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  local code
+  code="$(read_prompt "Runner command: ")"
+  if [[ -z "$code" ]]; then
+    print_warn "Cancelled"
+    pause
+    return 0
+  fi
+  print_info "bundle exec rails runner"
+  set +e
+  exec_in_pod bundle exec rails runner "$code"
+  set -e
+  pause
+}
+
+pod_logs() {
+  set +e
+  if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+    if [[ $# -gt 0 ]]; then
+      kc logs "$SELECTED_POD" -c "$SELECTED_CONTAINER" "$@"
+    else
+      kc logs "$SELECTED_POD" -c "$SELECTED_CONTAINER"
+    fi
+  else
+    if [[ $# -gt 0 ]]; then
+      kc logs "$SELECTED_POD" "$@"
+    else
+      kc logs "$SELECTED_POD"
+    fi
+  fi
+  set -e
+}
+
+show_logs() {
+  local tail_n="$1"
+  print_header "Logs (${tail_n})"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  set +e
+  pod_logs --tail="$tail_n" | page_output
+  set -e
+  pause
+}
+
+follow_logs() {
+  print_header "Follow Logs"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  if [[ "${SKIP_PAUSE:-0}" == "1" ]]; then
+    print_info "Ctrl-C to quit"
+  else
+    print_info "Ctrl-C returns to the action menu"
+  fi
+  set +e
+  trap '' INT
+  pod_logs -f || true
+  trap - INT
+  set -e
+  pause
+}
+
+previous_logs() {
+  print_header "Previous Logs"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  set +e
+  pod_logs --previous | page_output
+  set -e
+  pause
+}
+
+describe_pod() {
+  print_header "Describe Pod"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  set +e
+  kc describe pod "$SELECTED_POD" | page_output
+  set -e
+  pause
+}
+
+show_events() {
+  print_header "Events"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  set +e
+  if ! kc get events \
+    --field-selector "involvedObject.name=${SELECTED_POD}" \
+    --sort-by='.lastTimestamp' | page_output; then
+    print_error "Unable to load events"
+  fi
+  set -e
+  pause
+}
+
+show_metrics() {
+  print_header "CPU / Memory"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  local err
+  err="$(mktemp 2>/dev/null || echo "/tmp/kpod.$$.top")"
+  set +e
+  if kc top pod "$SELECTED_POD" 2>"$err"; then
+    :
+  else
+    print_warn "Pod metrics unavailable. Is metrics-server installed on this cluster?"
+    if [[ -s "$err" ]]; then
+      printf '%s%s%s\n' "$C_DIM" "$(tr '\n' ' ' < "$err")" "$C_RESET"
+    fi
+  fi
+  set -e
+  rm -f "$err"
+  pause
+}
+
+restart_deployment() {
+  print_header "Restart Deployment"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  local deploy
+  deploy="$(resolve_owner_deployment "$SELECTED_POD" || true)"
+  if [[ -z "$deploy" ]]; then
+    print_error "Could not find owning Deployment for this pod"
+    pause
+    return 1
+  fi
+  print_info "Restarting deployment/${deploy}"
+  set +e
+  if kc rollout restart "deployment/${deploy}"; then
+    if kc rollout status "deployment/${deploy}" --timeout="$KPOD_ROLLOUT_TIMEOUT"; then
+      print_success "Rollout of deployment/${deploy} completed"
+    else
+      print_error "Rollout of deployment/${deploy} failed or timed out"
+    fi
+  else
+    print_error "Failed to restart deployment/${deploy}"
+  fi
+  set -e
+  pause
+}
+
+rollout_status() {
+  print_header "Rollout Status"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  local deploy
+  deploy="$(resolve_owner_deployment "$SELECTED_POD" || true)"
+  if [[ -z "$deploy" ]]; then
+    print_error "Could not find owning Deployment for this pod"
+    pause
+    return 1
+  fi
+  print_info "deployment/${deploy}"
+  set +e
+  kc rollout status "deployment/${deploy}" --timeout="$KPOD_ROLLOUT_TIMEOUT" || true
+  set -e
+  pause
+}
+
+delete_pod() {
+  print_header "Delete Pod"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  if ! confirm "Delete pod?"; then
+    print_warn "Cancelled"
+    pause
+    return 0
+  fi
+  set +e
+  if kc delete pod "$SELECTED_POD"; then
+    print_success "Deleted ${SELECTED_POD}"
+    SELECTED_POD=""
+    SELECTED_CONTAINER=""
+  else
+    print_error "Failed to delete ${SELECTED_POD}"
+  fi
+  set -e
+  pause
+}
+
+port_forward() {
+  print_header "Port Forward"
+  printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  local local_port remote_port
+  local_port="$(read_prompt "Local Port: ")"
+  remote_port="$(read_prompt "Remote Port: ")"
+  if ! is_number "$local_port" || ! is_number "$remote_port"; then
+    print_error "Ports must be numbers"
+    pause
+    return 1
+  fi
+  print_info "Forwarding localhost:${local_port} -> ${SELECTED_POD}:${remote_port}"
+  print_info "Ctrl-C returns to the action menu"
+  set +e
+  trap '' INT
+  kc port-forward "pod/${SELECTED_POD}" "${local_port}:${remote_port}" || true
+  trap - INT
+  set -e
+  pause
+}
+
+looks_like_path() {
+  case "$1" in
+    /*|./*|../*|~/*|*/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+copy_from_pod() {
+  local remote_path="${1:-}"
+  local local_path="${2:-}"
+  if [[ "${SKIP_PAUSE:-0}" != "1" ]]; then
+    print_header "Copy File From Pod"
+    printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  else
+    print_info "Download from ${SELECTED_POD}"
+  fi
+  if [[ -z "$remote_path" ]]; then
+    remote_path="$(read_prompt "Remote path (in pod): ")"
+  fi
+  if [[ -z "$local_path" ]]; then
+    local_path="$(read_prompt "Local destination: ")"
+  fi
+  if [[ -z "$remote_path" || -z "$local_path" ]]; then
+    print_warn "Cancelled"
+    pause
+    return 0
+  fi
+  set +e
+  if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+    kubectl cp "${CURRENT_NAMESPACE}/${SELECTED_POD}:${remote_path}" "$local_path" -n "$CURRENT_NAMESPACE" -c "$SELECTED_CONTAINER"
+  else
+    kubectl cp "${CURRENT_NAMESPACE}/${SELECTED_POD}:${remote_path}" "$local_path" -n "$CURRENT_NAMESPACE"
+  fi
+  if [[ $? -eq 0 ]]; then
+    print_success "Copied to ${local_path}"
+  else
+    print_error "Copy failed"
+  fi
+  set -e
+  pause
+}
+
+copy_to_pod() {
+  local local_path="${1:-}"
+  local remote_path="${2:-}"
+  if [[ "${SKIP_PAUSE:-0}" != "1" ]]; then
+    print_header "Copy File To Pod"
+    printf 'Selected Pod:\n\n%s\n\n' "$SELECTED_POD"
+  else
+    print_info "Upload to ${SELECTED_POD}"
+  fi
+  if [[ -z "$local_path" ]]; then
+    local_path="$(read_prompt "Local source: ")"
+  fi
+  if [[ -z "$remote_path" ]]; then
+    remote_path="$(read_prompt "Remote path (in pod): ")"
+  fi
+  if [[ -z "$remote_path" || -z "$local_path" ]]; then
+    print_warn "Cancelled"
+    pause
+    return 0
+  fi
+  set +e
+  if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+    kubectl cp "$local_path" "${CURRENT_NAMESPACE}/${SELECTED_POD}:${remote_path}" -n "$CURRENT_NAMESPACE" -c "$SELECTED_CONTAINER"
+  else
+    kubectl cp "$local_path" "${CURRENT_NAMESPACE}/${SELECTED_POD}:${remote_path}" -n "$CURRENT_NAMESPACE"
+  fi
+  if [[ $? -eq 0 ]]; then
+    print_success "Copied to ${SELECTED_POD}:${remote_path}"
+  else
+    print_error "Copy failed"
+  fi
+  set -e
+  pause
+}
+
+# ---------------------------------------------------------------------------
+# Menus
+# ---------------------------------------------------------------------------
+
+select_pod() {
+  local last="${#POD_NAMES[@]}"
+  if (( last == 0 )); then
+    pause
+    return 1
+  fi
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select pod number (empty cancels): ")"
+  if [[ -z "$choice" ]]; then
+    return 1
+  fi
+  if ! is_number "$choice" || [[ -z "${POD_NAMES[choice]:-}" ]]; then
+    print_error "Invalid selection"
+    pause
+    return 1
+  fi
+  SELECTED_POD="${POD_NAMES[choice]}"
+  if ! select_container "$SELECTED_POD"; then
+    pause
+    return 1
+  fi
+  return 0
+}
+
+action_menu() {
+  while [[ -n "${SELECTED_POD:-}" ]]; do
+    print_header "Pod Actions"
+    printf 'Selected Pod:\n\n%s %s%s%s\n' "$ICON_POD" "$C_BOLD" "$SELECTED_POD" "$C_RESET"
+    if [[ -n "${SELECTED_CONTAINER:-}" ]]; then
+      printf 'Container: %s\n' "$SELECTED_CONTAINER"
+    fi
+    cat <<EOF
+
+  1) Exec Bash
+  2) Exec Sh
+  3) Rails Console
+  4) Rails DBConsole
+  5) Rails Runner
+
+  6) Logs (100)
+  7) Logs (500)
+  8) Follow Logs
+  9) Previous Logs
+
+ 10) Describe Pod
+ 11) Events
+
+ 12) CPU / Memory
+
+ 13) Restart Deployment
+ 14) Rollout Status
+
+ 15) Delete Pod
+
+ 16) Port Forward
+
+ 17) Copy File From Pod
+ 18) Copy File To Pod
+
+ 19) Back
+ 20) Exit
+EOF
+    printf '\n'
+    local choice
+    choice="$(read_choice "Select: ")"
+    case "$choice" in
+      1) exec_shell bash ;;
+      2) exec_shell sh ;;
+      3) rails_console ;;
+      4) rails_dbconsole ;;
+      5) rails_runner ;;
+      6) show_logs 100 ;;
+      7) show_logs 500 ;;
+      8) follow_logs ;;
+      9) previous_logs ;;
+      10) describe_pod ;;
+      11) show_events ;;
+      12) show_metrics ;;
+      13) restart_deployment ;;
+      14) rollout_status ;;
+      15)
+        delete_pod
+        if [[ -z "${SELECTED_POD:-}" ]]; then
+          return 0
+        fi
+        ;;
+      16) port_forward ;;
+      17) copy_from_pod ;;
+      18) copy_to_pod ;;
+      19) return 0 ;;
+      20) exit 0 ;;
+      *)
+        print_error "Invalid selection"
+        pause
+        ;;
+    esac
+  done
+}
+
+browse_namespace_pods() {
+  if ! ensure_namespace; then
+    pause
+    return 1
+  fi
+  print_header "Pods"
+  print_info "kubectl get pods -n ${CURRENT_NAMESPACE}"
+  printf '\n'
+  if ! load_pods 0 ""; then
+    pause
+    return 1
+  fi
+  print_pod_table
+  if select_pod; then
+    printf '\nSelected Pod:\n\n%s%s%s\n' "$C_BOLD" "$SELECTED_POD" "$C_RESET"
+    pause
+    action_menu
+  fi
+}
+
+pod_menu() {
+  browse_namespace_pods
+}
+
+main_menu() {
+  print_header
+  cat <<EOF
+  1) List Contexts
+  2) Browse Pods
+  3) Change Namespace
+  4) Exit
+EOF
+  printf '\n'
+  local choice
+  choice="$(read_choice "Select: ")"
+  case "$choice" in
+    1) select_context ;;
+    2) pod_menu ;;
+    3) select_namespace ;;
+    4|"")
+      printf '\n'
+      print_info "Goodbye"
+      exit 0
+      ;;
+    *)
+      print_error "Invalid selection"
+      pause
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# Quick CLI: kpod <namespace> <action> [search]
+# ---------------------------------------------------------------------------
+
+normalize_action() {
+  local action
+  action="$(tolower "$1")"
+  case "$action" in
+    console|c|rails) printf 'console' ;;
+    logs|log|l) printf 'logs' ;;
+    shell|bash|sh|exec) printf 'shell' ;;
+    download|dl|get) printf 'download' ;;
+    upload|ul|put) printf 'upload' ;;
+    *) printf '' ;;
+  esac
+}
+
+quick_select_pod() {
+  local search="$1"
+  print_info "Namespace: ${CURRENT_NAMESPACE}"
+  if [[ -n "$search" ]]; then
+    print_info "Search: ${search}"
+  fi
+  printf '\n'
+
+  if ! load_pods 1 "$search"; then
+    return 1
+  fi
+  if [[ ${#POD_NAMES[@]} -eq 0 ]]; then
+    print_warn "No running pods. Showing all."
+    if ! load_pods 0 "$search"; then
+      return 1
+    fi
+  fi
+  if [[ ${#POD_NAMES[@]} -eq 0 ]]; then
+    print_error "No pods found in ${CURRENT_NAMESPACE}"
+    return 1
+  fi
+
+  if [[ ${#POD_NAMES[@]} -eq 1 ]]; then
+    SELECTED_POD="${POD_NAMES[1]}"
+    print_success "Pod ${SELECTED_POD}"
+    if ! select_container "$SELECTED_POD"; then
+      return 1
+    fi
+    return 0
+  fi
+
+  print_pod_table
+  select_pod
+}
+
+run_quick() {
+  local ns env
+  local action="$2"
+  local search="${3:-}"
+  local path_a="${4:-}"
+  local path_b="${5:-}"
+  env="$(env_from_arg "$1")"
+  ns="$(resolve_namespace "$1")"
+
+  SKIP_PAUSE=1
+  if [[ -n "$env" ]]; then
+    apply_env "$env" || exit 1
+  else
+    CURRENT_NAMESPACE="$ns"
+    if ! refresh_cluster_state; then
+      print_warn "Unable to read current kube context. Check kubectl / kubeconfig."
+    fi
+    CURRENT_NAMESPACE="$ns"
+    save_last_namespace
+  fi
+
+  print_header "Quick: ${action}"
+  if ! quick_select_pod "$search"; then
+    exit 1
+  fi
+
+  case "$action" in
+    console) rails_console ;;
+    logs) follow_logs ;;
+    shell) exec_shell bash ;;
+    download) copy_from_pod "$path_a" "$path_b" ;;
+    upload) copy_to_pod "$path_a" "$path_b" ;;
+    *)
+      print_error "Unknown action: ${action}"
+      exit 1
+      ;;
+  esac
+  exit 0
+}
+
+gist_id() {
+  local id="${KPOD_GIST_ID:-}"
+  if [[ -n "$id" ]]; then
+    printf '%s' "$id"
+    return 0
+  fi
+  if [[ -f "${KPOD_CONFIG_DIR}/gist_id" ]]; then
+    id="$(tr -d '[:space:]' < "${KPOD_CONFIG_DIR}/gist_id")"
+    if [[ -n "$id" ]]; then
+      printf '%s' "$id"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+gist_raw_url() {
+  local id file
+  id="$(gist_id)" || return 1
+  file="$1"
+  printf 'https://gist.githubusercontent.com/%s/%s/raw/%s' "$KPOD_GIST_USER" "$id" "$file"
+}
+
+run_kpod_update() {
+  local installer tmp
+  if id="$(gist_id 2>/dev/null)"; then
+    :
+  fi
+  installer="$(gist_raw_url install.sh 2>/dev/null || true)"
+  if [[ -z "$installer" ]]; then
+    print_error "No GitHub Gist id. Set KPOD_GIST_ID or ~/.config/kpod/gist_id"
+    exit 1
+  fi
+  tmp="$(mktemp 2>/dev/null || echo "/tmp/kpod-install.$$")"
+  print_info "Downloading installer from GitHub Gist"
+  if ! curl -fsSL "${installer}?$(date +%s)" -o "$tmp"; then
+    rm -f "$tmp"
+    print_error "Failed to download ${installer}"
+    exit 1
+  fi
+  bash "$tmp" --update
+  rm -f "$tmp"
+}
+
+# ---------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------
+
+main() {
+  case "${1:-}" in
+    --version|-v)
+      printf '%s %s\n' "$KPOD_NAME" "$KPOD_VERSION"
+      exit 0
+      ;;
+  esac
+
+  init_colors
+  init_icons
+  init_config
+
+  case "${1:-}" in
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    --update)
+      run_kpod_update
+      exit 0
+      ;;
+  esac
+
+  restore_tty
+
+  require_kubectl
+
+  case "${1:-}" in
+    "")
+      if ! refresh_cluster_state; then
+        print_warn "Unable to read current kube context. Check kubectl / kubeconfig."
+      fi
+      if [[ -z "${CURRENT_NAMESPACE:-}" || "$CURRENT_NAMESPACE" == "default" ]]; then
+        ensure_namespace || true
+      fi
+      while true; do
+        main_menu
+      done
+      ;;
+    *)
+      if [[ $# -eq 1 ]]; then
+        local env
+        env="$(env_from_arg "$1")"
+        if [[ -n "$env" ]]; then
+          apply_env "$env" || exit 1
+        else
+          CURRENT_NAMESPACE="$(resolve_namespace "$1")"
+          if ! refresh_cluster_state; then
+            print_warn "Unable to read current kube context. Check kubectl / kubeconfig."
+          fi
+          CURRENT_NAMESPACE="$(resolve_namespace "$1")"
+          save_last_namespace
+        fi
+        while true; do
+          main_menu
+        done
+      fi
+
+      local action search="" path_a="" path_b=""
+      action="$(normalize_action "${2:-}")"
+      if [[ -z "$action" ]]; then
+        print_error "Unknown action: ${2:-}"
+        print_usage
+        exit 1
+      fi
+      if [[ $# -ge 5 ]]; then
+        search="$3"
+        path_a="$4"
+        path_b="$5"
+      elif [[ $# -eq 4 ]]; then
+        if looks_like_path "$3"; then
+          path_a="$3"
+          path_b="$4"
+        else
+          search="$3"
+        fi
+      elif [[ $# -eq 3 ]]; then
+        if looks_like_path "$3"; then
+          path_a="$3"
+        else
+          search="$3"
+        fi
+      fi
+      run_quick "$1" "$action" "$search" "$path_a" "$path_b"
+      ;;
+  esac
+}
+
+main "$@"
