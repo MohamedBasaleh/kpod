@@ -2,9 +2,23 @@
 
 ## Unreleased
 
-- `kpod uninstall` and `kpod uninstall --purge` for a safe first-run reset (never touches kubeconfig or AWS files)
+## 2.0.1
+
+### Fixed
+
+- First-run context picker no longer clips the first character of lines at common terminal widths.
+- `j` / `k` move the onboarding cursor. Space still toggles selection. Enter continues.
+
+### Added
+
+- `kpod uninstall` removes kpod-owned binaries from known install paths. Confirmation defaults to No. `--yes` skips the prompt.
+- `kpod uninstall --purge` also deletes kpod config and generated files. kubeconfig, AWS files, and shell rc files are never rewritten. Homebrew Cellar binaries are not deleted.
+- Namespace browser: Enter on a mapped namespace opens that environment. Enter (or `a`) on an unmapped namespace starts Add Environment. The mapping stores the selected context and namespace. Esc cancels with no write.
+
+## 2.0.0
+
 - MIT License (Copyright (c) 2026 Mohamed Basaleh)
-- Curl installer is the primary supported install method for v2.0.0; Homebrew is postponed
+- Curl installer is the primary supported install method; Homebrew is postponed
 - Resolve the latest **stable** GitHub Release via the GitHub API (do not parse `/releases/latest` redirects as a tag)
 - Fail clearly when no stable release exists; keep `KPOD_VERSION` for explicit tags including RCs
 - Warn when another `kpod` on `PATH` shadows `~/.local/bin/kpod`

@@ -90,7 +90,7 @@ From the dashboard:
 
 | Key | Action |
 | --- | --- |
-| Enter | Open environment / pod |
+| Enter | Open environment / pod; on an unmapped namespace, start Add Environment |
 | `/` | Search |
 | `n` | Namespaces |
 | `k` | Contexts |
