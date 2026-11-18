@@ -90,6 +90,23 @@ func TestCommandCollision(t *testing.T) {
 	}
 }
 
+func TestFindManagedLinesDoesNotModify(t *testing.T) {
+	home := t.TempDir()
+	rc := filepath.Join(home, ".zshrc")
+	orig := "export PATH=/usr/bin\n# kpod shortcuts\nsource \"/tmp/x/.config/kpod/shell/aliases.zsh\"\n"
+	if err := os.WriteFile(rc, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := FindManagedLines(home)
+	if len(got) != 1 || got[0].Path != rc {
+		t.Fatalf("%v", got)
+	}
+	body, _ := os.ReadFile(rc)
+	if string(body) != orig {
+		t.Fatal("must not rewrite rc")
+	}
+}
+
 func TestStatusReportsMissingEnv(t *testing.T) {
 	cfg := testCfg()
 	cfg.Shortcuts["sc"] = config.Shortcut{Environment: "gone", Action: "console"}

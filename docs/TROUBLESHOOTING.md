@@ -39,6 +39,27 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The installer prints this warning when it detects the mismatch. It will not delete the older file.
 
+## Reset kpod to first-run
+
+To test onboarding as if kpod was never installed:
+
+```bash
+kpod uninstall --purge
+```
+
+That removes the kpod binary and `~/.config/kpod/` only. It does not change `~/.kube/config`, kubectl, or AWS files.
+
+`kpod uninstall` without `--purge` removes the binary and keeps config.
+
+Then reinstall and run `kpod` to see the context picker again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MohamedBasaleh/kpod/main/scripts/install.sh | sh
+kpod
+```
+
+If a leftover `kpod` still runs, check `command -v kpod` — another path on `PATH` was not a known install location and was left in place.
+
 ## Homebrew
 
 Homebrew is not a supported install method for v2.0.0. Use the curl installer. If `kpod` happens to live under a Homebrew Cellar path, `kpod --update` will refuse to replace that file.

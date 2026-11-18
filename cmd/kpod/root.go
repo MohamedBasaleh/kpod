@@ -34,6 +34,8 @@ Examples:
   kpod dev bash
   kpod shortcut generate
   kpod discover
+  kpod uninstall
+  kpod uninstall --purge
 `,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -83,6 +85,7 @@ Examples:
 	cmd.AddCommand(newMigrateCommand(&configDir))
 	cmd.AddCommand(newShortcutCommand(&configDir))
 	cmd.AddCommand(newDiscoverCommand(&configDir))
+	cmd.AddCommand(newUninstallCommand(&configDir))
 	cmd.AddCommand(newDebugCommand())
 	cmd.CompletionOptions.HiddenDefaultCmd = false
 	return cmd

@@ -153,6 +153,34 @@ Manual editing is normally unnecessary. See [docs/SCHEMA.md](docs/SCHEMA.md).
 
 kpod stores mappings locally. It does **not** store kube credentials, tokens, or cluster secrets. There is no telemetry. Network use is kubectl plus optional GitHub Releases for install/update.
 
+## Uninstall
+
+Remove the installed binary and keep your kpod config:
+
+```bash
+kpod uninstall
+```
+
+Return the machine to a clean first-run state (deletes `~/.config/kpod/` as well):
+
+```bash
+kpod uninstall --purge
+```
+
+Neither command edits kubeconfig, Kubernetes contexts, or AWS credentials. They do not rewrite shell rc files. If a `source …/kpod/shell/aliases.zsh` line is present, kpod prints it so you can delete it by hand.
+
+Confirm with `--yes` to skip the prompt. Default is **No**.
+
+Clean test cycle:
+
+```bash
+kpod uninstall --purge
+curl -fsSL https://raw.githubusercontent.com/MohamedBasaleh/kpod/main/scripts/install.sh | sh
+kpod
+```
+
+After purge, `kpod` opens first-run onboarding when there is no config.
+
 ## Update
 
 ```bash

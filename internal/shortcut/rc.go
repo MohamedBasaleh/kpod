@@ -120,6 +120,46 @@ func RemoveManagedBlock(content, aliasFile string) (string, bool) {
 	return result, changed
 }
 
+// RCMatch is a kpod-managed source line found in a shell rc file.
+type RCMatch struct {
+	Path  string
+	Lines []string
+}
+
+// FindManagedLines reports kpod source lines in common shell rc files.
+// It does not modify any file.
+func FindManagedLines(home string) []RCMatch {
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	names := []string{".zshrc", ".bashrc", ".bash_profile", ".profile"}
+	var out []RCMatch
+	for _, name := range names {
+		path := filepath.Join(home, name)
+		body, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		content := string(body)
+		if !HasManagedBlock(content) {
+			continue
+		}
+		var lines []string
+		for _, line := range strings.Split(content, "\n") {
+			trim := strings.TrimSpace(line)
+			if trim == managedComment || strings.Contains(trim, "/kpod/shell/aliases.") || strings.Contains(trim, "/shell/aliases.zsh") || strings.Contains(trim, "/shell/aliases.bash") {
+				if trim != "" {
+					lines = append(lines, trim)
+				}
+			}
+		}
+		if len(lines) > 0 {
+			out = append(out, RCMatch{Path: path, Lines: lines})
+		}
+	}
+	return out
+}
+
 func InstallPlan(paths config.Paths, home string, kind ShellKind) (rcPath, aliasFile, snippet string) {
 	aliasFile = paths.AliasFile(string(kind))
 	rcPath = RCPath(home, kind)

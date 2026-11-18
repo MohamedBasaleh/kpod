@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `kpod uninstall` and `kpod uninstall --purge` for a safe first-run reset (never touches kubeconfig or AWS files)
 - MIT License (Copyright (c) 2026 Mohamed Basaleh)
 - Curl installer is the primary supported install method for v2.0.0; Homebrew is postponed
 - Resolve the latest **stable** GitHub Release via the GitHub API (do not parse `/releases/latest` redirects as a tag)
