@@ -8,15 +8,7 @@ kpod maps short **environment** names to a Kubernetes context and namespace, the
 
 Needs `kubectl` on your `PATH`. The installed binary does not require Go.
 
-### Homebrew
-
-```bash
-brew install MohamedBasaleh/kpod/kpod
-```
-
-The formula lives in the tap `MohamedBasaleh/homebrew-kpod` and installs binaries from [GitHub Releases](https://github.com/MohamedBasaleh/kpod/releases).
-
-### Direct installer
+The primary supported install method for v2.0.0 is the curl installer. Homebrew is postponed and is not offered yet.
 
 Installs into `~/.local/bin` without sudo. It does not edit kubeconfig, kpod config, or shell rc files.
 
@@ -167,13 +159,7 @@ kpod stores mappings locally. It does **not** store kube credentials, tokens, or
 kpod --update
 ```
 
-Downloads the latest **stable** GitHub Release from [github.com/MohamedBasaleh/kpod/releases](https://github.com/MohamedBasaleh/kpod/releases), verifies checksums, and replaces the binary. Config and shortcuts are not touched.
-
-If Homebrew installed kpod:
-
-```bash
-brew upgrade kpod
-```
+Downloads the latest **stable** GitHub Release from [github.com/MohamedBasaleh/kpod/releases](https://github.com/MohamedBasaleh/kpod/releases), verifies checksums, and replaces the binary. Config and shortcuts are not touched. Homebrew is not a supported install path for v2.0.0.
 
 ## Completions
 
@@ -183,7 +169,7 @@ kpod completion bash
 kpod completion fish
 ```
 
-Homebrew installs these automatically. Completions read local config for environment names; they do not call kubectl.
+Completions read local config for environment names; they do not call kubectl.
 
 ## Migration from v1
 
@@ -202,7 +188,7 @@ v1 is legacy (`legacy/kpod-v1` in this repository). v2 does not invoke it. Exist
 
 ## Troubleshooting
 
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for kubectl, credentials, VPN, RBAC, metrics, Homebrew updates, and terminals.
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for kubectl, credentials, VPN, RBAC, metrics, PATH shadowing, and terminals.
 
 ## Development
 
@@ -216,4 +202,4 @@ go vet ./...
 
 ## License
 
-No license has been selected by the owner. This repository is not currently offered under an OSI-approved license; do not assume you may redistribute it until a LICENSE file is added.
+[MIT](LICENSE). Copyright (c) 2026 Mohamed Basaleh.

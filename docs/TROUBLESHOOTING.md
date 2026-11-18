@@ -39,13 +39,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 The installer prints this warning when it detects the mismatch. It will not delete the older file.
 
-## Homebrew-installed kpod
+## Homebrew
 
-`kpod --update` will not replace Homebrew files. The formula is in `MohamedBasaleh/homebrew-kpod`. Use:
-
-```bash
-brew upgrade kpod
-```
+Homebrew is not a supported install method for v2.0.0. Use the curl installer. If `kpod` happens to live under a Homebrew Cellar path, `kpod --update` will refuse to replace that file.
 
 ## TUI will not start
 

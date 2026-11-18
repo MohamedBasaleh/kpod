@@ -26,6 +26,7 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
+      - LICENSE
       - docs/*
 
 checksum:
@@ -51,6 +52,7 @@ brews:
   - name: kpod
     description: Fast, interactive Kubernetes access for developers
     homepage: https://github.com/MohamedBasaleh/kpod
+    license: MIT
     directory: Formula
     skip_upload: true
     repository:
