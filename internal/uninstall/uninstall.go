@@ -25,24 +25,24 @@ type Options struct {
 	Yes            bool
 	ExplicitConfig bool
 	ExecPath       string
-	LookPath func(string) (string, error)
-	In       io.Reader
-	Out      io.Writer
-	Err      io.Writer
+	LookPath       func(string) (string, error)
+	In             io.Reader
+	Out            io.Writer
+	Err            io.Writer
 }
 
 // Plan is the preview of an uninstall. It never includes kubeconfig or AWS paths.
 type Plan struct {
-	Remove      []string
-	Skip        []string
-	Leftover    []string
-	RC          []shortcut.RCMatch
-	ConfigDir   string
-	Purge       bool
-	Homebrew    string
-	SelfRemove  string
-	ManualRM    string
-	Protected   []string
+	Remove     []string
+	Skip       []string
+	Leftover   []string
+	RC         []shortcut.RCMatch
+	ConfigDir  string
+	Purge      bool
+	Homebrew   string
+	SelfRemove string
+	ManualRM   string
+	Protected  []string
 }
 
 // Result is what happened after Execute.
