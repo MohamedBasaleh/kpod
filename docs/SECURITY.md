@@ -6,7 +6,7 @@
 - Shortcut IDs allow `[A-Za-z0-9_-]` only.
 - Environment aliases reject spaces and shell metacharacters.
 - Generated shortcut functions quote environment and action names.
-- Installer and `kpod --update` verify SHA-256 checksums before replacing a binary.
+- Installer and `kpod --update` download from GitHub Releases on `MohamedBasaleh/kpod` and verify SHA-256 checksums before replacing a binary.
 - Checksum mismatch leaves the existing binary in place.
 - Homebrew-managed binaries are not self-replaced.
 - Destructive pod actions require confirmation.

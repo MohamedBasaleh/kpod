@@ -11,27 +11,39 @@ Needs `kubectl` on your `PATH`. The installed binary does not require Go.
 ### Homebrew
 
 ```bash
-brew tap MohamedBasaleh/kpod
-brew install kpod
+brew install MohamedBasaleh/kpod/kpod
 ```
+
+The formula lives in the tap `MohamedBasaleh/homebrew-kpod` and installs binaries from [GitHub Releases](https://github.com/MohamedBasaleh/kpod/releases).
 
 ### Direct installer
 
 Installs into `~/.local/bin` without sudo. It does not edit kubeconfig, kpod config, or shell rc files.
 
+The default command installs the latest **stable** GitHub Release (not RCs):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MohamedBasaleh/kpod/main/scripts/install.sh | sh
 ```
 
-If `kpod` is not found:
+Install a specific tag, including a prerelease:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MohamedBasaleh/kpod/main/scripts/install.sh \
+  | KPOD_VERSION=v2.0.0-rc.2 sh
+```
+
+If `kpod` is not found, or an older `kpod` (for example `~/bin/kpod`) still runs, put the installer directory first:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+The installer does not delete or replace a shadowed binary. Use `command -v kpod` to see which file the shell runs.
+
 ### Manual download
 
-GitHub Releases include:
+Binaries are published at [github.com/MohamedBasaleh/kpod/releases](https://github.com/MohamedBasaleh/kpod/releases). Each release includes:
 
 - `kpod_<version>_darwin_arm64.tar.gz`
 - `kpod_<version>_darwin_amd64.tar.gz`
@@ -155,7 +167,7 @@ kpod stores mappings locally. It does **not** store kube credentials, tokens, or
 kpod --update
 ```
 
-Downloads the latest **stable** GitHub Release, verifies checksums, and replaces the binary. Config and shortcuts are not touched.
+Downloads the latest **stable** GitHub Release from [github.com/MohamedBasaleh/kpod/releases](https://github.com/MohamedBasaleh/kpod/releases), verifies checksums, and replaces the binary. Config and shortcuts are not touched.
 
 If Homebrew installed kpod:
 

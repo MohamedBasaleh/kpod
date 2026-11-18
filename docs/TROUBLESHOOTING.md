@@ -28,9 +28,20 @@ Pass a tighter pod filter (`kpod dev logs api`). Interactive mode lets you pick.
 
 kpod tries `bash`, then `sh`. If the container has neither, use **Shell** after checking the image.
 
+## Wrong `kpod` after the curl installer
+
+The installer writes `~/.local/bin/kpod` and does not change other binaries. If `kpod --version` is still old, another file is earlier on `PATH` (often `~/bin/kpod`).
+
+```bash
+command -v kpod
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The installer prints this warning when it detects the mismatch. It will not delete the older file.
+
 ## Homebrew-installed kpod
 
-`kpod --update` will not replace Homebrew files. Use:
+`kpod --update` will not replace Homebrew files. The formula is in `MohamedBasaleh/homebrew-kpod`. Use:
 
 ```bash
 brew upgrade kpod

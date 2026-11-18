@@ -31,3 +31,5 @@ jobs:
           bash -n scripts/install.sh
           bash -n install.sh
           bash -n legacy/kpod-v1
+      - name: installer helpers
+        run: sh scripts/install_test.sh

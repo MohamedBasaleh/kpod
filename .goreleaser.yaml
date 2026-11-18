@@ -39,10 +39,14 @@ changelog:
       - "^test:"
 
 release:
+  github:
+    owner: MohamedBasaleh
+    name: kpod
   draft: false
   prerelease: auto
   name_template: "kpod {{.Tag}}"
 
+# GoReleaser v2.8 (CI-pinned) has no homebrew_casks. Keep Formula/kpod.rb via brews.
 brews:
   - name: kpod
     description: Fast, interactive Kubernetes access for developers
