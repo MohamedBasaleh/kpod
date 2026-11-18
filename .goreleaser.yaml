@@ -2,10 +2,6 @@ version: 2
 
 project_name: kpod
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: kpod
     main: ./cmd/kpod
