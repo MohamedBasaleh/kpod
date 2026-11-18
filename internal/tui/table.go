@@ -16,7 +16,7 @@ func pad(s string, width int) string {
 func row(cursor bool, cells ...string) string {
 	line := "  " + strings.Join(cells, "  ")
 	if cursor {
-		return styleCursor.Render("❯ " + strings.Join(cells, "  "))
+		return styleCursor.Render("> " + strings.Join(cells, "  "))
 	}
 	return line
 }

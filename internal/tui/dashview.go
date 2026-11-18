@@ -8,7 +8,6 @@ import (
 	"github.com/MohamedBasaleh/kpod/internal/action"
 	"github.com/MohamedBasaleh/kpod/internal/discover"
 	"github.com/MohamedBasaleh/kpod/internal/kube"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func (m mainModel) View() string {
@@ -74,7 +73,7 @@ func (m mainModel) View() string {
 	if m.searching {
 		body += "\n\n" + m.search.View()
 	}
-	return lipgloss.NewStyle().MaxWidth(m.width).Render(m.header() + "\n\n" + body)
+	return renderFrame(m.width, m.header()+"\n\n"+body)
 }
 
 func (m mainModel) viewDashboard() string {

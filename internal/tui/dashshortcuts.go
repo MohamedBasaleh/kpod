@@ -401,7 +401,7 @@ func (m mainModel) viewShortcutGen() string {
 
 func rowLine(cursor bool, line string) string {
 	if cursor {
-		return styleCursor.Render("❯ " + line)
+		return styleCursor.Render("> " + line)
 	}
 	return "  " + line
 }

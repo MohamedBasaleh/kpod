@@ -91,7 +91,7 @@ func (m model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) moveCursor(delta int) {
+func (m *model) moveCursor(delta int) {
 	switch m.screen {
 	case screenMigrate:
 		m.migrateMenu.move(delta)

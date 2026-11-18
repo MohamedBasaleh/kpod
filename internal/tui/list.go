@@ -95,7 +95,7 @@ func (c *checklist) view(width, height int) string {
 		prefix := "  "
 		line := prefix + mark + " " + ellipsize(item, nameWidth)
 		if i == c.cursor {
-			line = styleCursor.Render("❯ " + mark + " " + ellipsize(item, nameWidth))
+			line = styleCursor.Render("> " + mark + " " + ellipsize(item, nameWidth))
 		}
 		b.WriteString(line)
 		if i < end-1 {
@@ -135,7 +135,7 @@ func (m menu) view() string {
 	for i, item := range m.items {
 		prefix := "  "
 		if i == m.cursor {
-			prefix = "❯ "
+			prefix = "> "
 			b.WriteString(styleCursor.Render(prefix + item))
 		} else {
 			b.WriteString(prefix + item)

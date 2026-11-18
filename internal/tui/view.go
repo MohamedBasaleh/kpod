@@ -56,7 +56,19 @@ func (m model) View() string {
 		}
 		body = body + "\n\n" + styled
 	}
-	return lipgloss.NewStyle().MaxWidth(m.width).Render(body)
+	return renderFrame(m.width, body)
+}
+
+func renderFrame(width int, body string) string {
+	if width <= 0 {
+		width = 80
+	}
+	// Leave one column empty so a full-width last cell does not wrap and
+	// clip the first character of every line in the alt screen.
+	if width > 1 {
+		width--
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(body)
 }
 
 func (m model) viewWelcome() string {
@@ -85,7 +97,7 @@ func (m model) viewMigrate() string {
 		b.WriteString("\n\n")
 	}
 	b.WriteString(m.migrateMenu.view())
-	b.WriteString("\n\n" + styleHelp.Render("↑/↓  enter  q"))
+	b.WriteString("\n\n" + styleHelp.Render("j/k  enter  q"))
 	return b.String()
 }
 
@@ -111,13 +123,18 @@ func (m model) mappingList(limit int) string {
 }
 
 func (m model) viewContexts() string {
-	found := fmt.Sprintf("Select Kubernetes contexts")
-	if n := m.contexts.len(); n > 0 {
-		found = styleMuted.Render(fmt.Sprintf("%d contexts found", n)) + "\n\n" + found
+	title := styleTitle.Render("Select Kubernetes contexts")
+	intro := "Choose the clusters you use. Space selects, Enter continues."
+	if m.help != "" {
+		intro = m.help
 	}
-	return found + "\n\n" + m.help + "\n\n" +
+	head := title
+	if n := m.contexts.len(); n > 0 {
+		head = styleMuted.Render(fmt.Sprintf("%d contexts found", n)) + "\n\n" + title
+	}
+	return head + "\n\n" + intro + "\n\n" +
 		m.contexts.view(m.listWidth(), m.listHeight()) + "\n\n" +
-		styleHelp.Render("↑/↓ j/k  space  enter  q")
+		styleHelp.Render("j/k  space  enter  q")
 }
 
 func (m model) viewNamespaces() string {
@@ -125,7 +142,7 @@ func (m model) viewNamespaces() string {
 		"Select namespaces to use with kpod\n\n" +
 		styleMuted.Render(m.help) + "\n\n" +
 		m.namespaces.view(m.listWidth(), m.listHeight()) + "\n\n" +
-		styleHelp.Render("↑/↓ j/k  space  enter  esc  q")
+		styleHelp.Render("j/k  space  enter  esc  q")
 }
 
 func (m model) viewForbidden() string {
@@ -133,7 +150,7 @@ func (m model) viewForbidden() string {
 		"Your Kubernetes account cannot list namespaces.\n\n" +
 		"You can still add a namespace you already have access to.\n\n" +
 		m.forbiddenMenu.view() + "\n\n" +
-		styleHelp.Render("↑/↓  enter  esc  q")
+		styleHelp.Render("j/k  enter  esc  q")
 }
 
 func (m model) viewManualNS() string {
@@ -145,7 +162,7 @@ func (m model) viewManualNS() string {
 func (m model) viewDenied() string {
 	return styleTitle.Render(ellipsize(m.current, m.listWidth())) + "\n\n" +
 		m.deniedMenu.view() + "\n\n" +
-		styleHelp.Render("↑/↓  enter")
+		styleHelp.Render("j/k  enter")
 }
 
 func (m model) viewAlias() string {
